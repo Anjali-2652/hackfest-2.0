@@ -1,6 +1,9 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useState, useEffect } from "react";
+import * as XLSX from "xlsx";
+import { loadDatasetFromLS, loadUsersFromLS, setAuth } from "../lib/data";
+import { useRouter } from "next/navigation";
 
 type Mode = "user" | "admin";
 
@@ -8,8 +11,8 @@ const demo = {
   admin: { username: "admin", password: "admin123" },
   users: [
     { name: "Ahmed Tariq", id: "EMP-001", pass: "pass123" },
-    { name: "Sara Khan", id: "EMP-013", pass: "pass123" },
-    { name: "Fatima Khan", id: "EMP-003", pass: "pass123" },
+    { name: "Sarah Mitchell", id: "EMP-002", pass: "pass123" },
+    { name: "James Chen", id: "EMP-003", pass: "pass123" },
   ],
 };
 
@@ -23,6 +26,9 @@ export default function Page() {
   const [password, setPassword] = useState("");
   const [loading, setLoading] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const [dataset, setDataset] = useState<Array<Record<string, any>>>([]);
+  const [htmlPreview, setHtmlPreview] = useState<string | null>(null);
+  const router = useRouter();
 
   const placeholder = useMemo(() => {
     return mode === "user" ? "e.g. EMP-001 or admin" : "e.g. admin";
@@ -38,14 +44,63 @@ export default function Page() {
 
     if (mode === "admin") {
       const ok = username === demo.admin.username && password === demo.admin.password;
-      setMessage(ok ? "✅ Admin login success (demo)" : "❌ Invalid admin credentials (demo)");
+      if (ok) {
+        setAuth("admin");
+        router.push("/admin");
+      } else {
+        setMessage("❌ Invalid admin credentials (demo)");
+      }
     } else {
-      const ok = demo.users.some((u) => u.id === username && u.pass === password);
-      setMessage(ok ? "✅ User login success (demo)" : "❌ Invalid user credentials (demo)");
+      // Always check demo.users for login (these are the hardcoded demo credentials)
+      const found = demo.users.find((u) => (u.id === username || u.name === username) && u.pass === password);
+      if (found) {
+        setAuth(found.id);
+        router.push("/employee");
+      } else {
+        setMessage("❌ Invalid user credentials (demo)");
+      }
     }
 
     setLoading(false);
   }
+
+  // Excel parsing (client-side)
+  async function handleExcelChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const data = await file.arrayBuffer();
+      const workbook = XLSX.read(data);
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(sheet);
+      setDataset(json as Array<Record<string, any>>);
+      setMessage("✅ Excel file parsed (preview below)");
+    } catch (err) {
+      setMessage("❌ Failed to parse Excel file");
+    }
+  }
+
+  // HTML preview (client-side)
+  async function handleHtmlChange(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    try {
+      const text = await file.text();
+      setHtmlPreview(text);
+      setMessage("✅ HTML file loaded (preview below)");
+    } catch (err) {
+      setMessage("❌ Failed to load HTML file");
+    }
+  }
+
+  useEffect(() => {
+    try {
+      const ds = loadDatasetFromLS();
+      if (ds && ds.length > 0) setDataset(ds);
+    } catch (e) {
+      // ignore
+    }
+  }, []);
 
   function fillDemoAdmin() {
     setMode("admin");
@@ -59,6 +114,15 @@ export default function Page() {
     setUsername(id);
     setPassword(pass);
     setMessage(null);
+  }
+
+  function clearCache() {
+    if (typeof window !== "undefined") {
+      localStorage.clear();
+      setMessage("✅ Cache cleared! Try logging in again.");
+      setUsername("");
+      setPassword("");
+    }
   }
 
   return (
@@ -184,6 +248,7 @@ export default function Page() {
               </div>
 
               <div className="mt-3 space-y-2 text-xs">
+                <div className="mb-2 text-xs text-white/60">Loaded dataset rows: {dataset.length}</div>
                 <div className="flex items-center justify-between gap-3">
                   <div className="text-white/70">
                     Admin:{" "}
@@ -203,7 +268,7 @@ export default function Page() {
                 {demo.users.map((u) => (
                   <div key={u.id} className="flex items-center justify-between gap-3">
                     <div className="text-white/55">
-                      User ({u.name}):{" "}
+                      {u.name} ({u.id}):{" "}
                       <span className="text-white/90 font-semibold">{u.id}</span>{" "}
                       /{" "}
                       <span className="text-white/90 font-semibold">{u.pass}</span>
@@ -211,15 +276,90 @@ export default function Page() {
                     <button
                       type="button"
                       onClick={() => fillDemoUser(u.id, u.pass)}
-                      className="rounded-lg px-2 py-1 bg-white/5 ring-1 ring-white/10 hover:bg-white/10 transition"
+                      className="rounded-lg px-2 py-1 bg-white/5 ring-1 ring-white/10 hover:bg-white/10 transition whitespace-nowrap"
                     >
                       Use
                     </button>
                   </div>
                 ))}
+
+                <div className="mt-4 pt-3 border-t border-white/10">
+                  <button
+                    type="button"
+                    onClick={clearCache}
+                    className="w-full rounded-lg px-3 py-2 bg-red-500/10 ring-1 ring-red-500/30 hover:bg-red-500/20 transition text-red-300 font-medium text-xs"
+                  >
+                    🗑️ Clear Cache & Reset
+                  </button>
+                  <div className="text-xs text-white/40 mt-2 text-center">
+                    Having login issues? Clear cache and try again.
+                  </div>
+                </div>
               </div>
             </div>
           </div>
+
+            {/* Import UI & Data (Excel + HTML preview) */}
+            <div className="mt-6 rounded-xl bg-[#071623]/60 ring-1 ring-white/6 p-4">
+              <div className="text-xs font-semibold text-white/80 tracking-wide">Import UI & Dataset</div>
+
+              <div className="mt-3 space-y-3 text-xs">
+                <div className="flex items-center gap-3">
+                  <input
+                    type="file"
+                    accept=".xlsx,.xls"
+                    onChange={handleExcelChange}
+                    className="text-sm"
+                  />
+                  <div className="text-white/60">Upload Excel dataset (PolicyGuard_Compliance_Report.xlsx)</div>
+                </div>
+
+                <div className="flex items-center gap-3">
+                  <input
+                    type="file"
+                    accept="text/html"
+                    onChange={handleHtmlChange}
+                    className="text-sm"
+                  />
+                  <div className="text-white/60">Upload HTML UI (policyguard-full-system.html)</div>
+                </div>
+
+                {dataset && dataset.length > 0 && (
+                  <div className="mt-3 overflow-auto rounded-md bg-[#061425]/40 p-2">
+                    <div className="text-xs text-white/70 mb-2">Dataset preview ({dataset.length} rows)</div>
+                    <table className="w-full text-left text-xs">
+                      <thead>
+                        <tr>
+                          {Object.keys(dataset[0]).map((k) => (
+                            <th key={k} className="pr-4 pb-2 text-white/60">{k}</th>
+                          ))}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {dataset.slice(0, 10).map((row, i) => (
+                          <tr key={i} className="align-top">
+                            {Object.keys(dataset[0]).map((k) => (
+                              <td key={k} className="pr-4 py-1 text-white/70">
+                                {String((row as any)[k] ?? "")}
+                              </td>
+                            ))}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+
+                {htmlPreview && (
+                  <div className="mt-3">
+                    <div className="text-xs text-white/70 mb-2">HTML preview</div>
+                    <div className="w-full h-64 border rounded-md overflow-hidden">
+                      <iframe title="html-preview" srcDoc={htmlPreview} className="w-full h-full" />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
 
           {/* Bottom subtle border */}
           <div className="h-px bg-gradient-to-r from-transparent via-white/10 to-transparent" />
